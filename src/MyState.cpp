@@ -3,27 +3,26 @@
 // Constructor
 
 MyState::MyState(){
-
     //;
-
 }
 
 // Destructor
-
 MyState::~MyState(){
-    //;
 }
 
 
-SimTK::Vec3 MyState::getCartesian(int atom_no){
+// int atom_no
+SimTK::Vec3 MyState::getCartesian(int){
+    return {};
+}
+
+// int atom_no, SimTK::Real x, SimTK::Real y, SimTK::Real z
+void MyState::updCartesian(int, SimTK::Real, SimTK::Real, SimTK::Real){
 
 }
 
-void MyState::updCartesian(int atom_no, SimTK::Real x, SimTK::Real y, SimTK::Real z){
-
-}
-
-void MyState::setCartesian(int atom_no, SimTK::Real x, SimTK::Real y, SimTK::Real z){
+// int atom_no, SimTK::Real x, SimTK::Real y, SimTK::Real z
+void MyState::setCartesian(int, SimTK::Real, SimTK::Real, SimTK::Real){
 
 }
 

@@ -1,44 +1,47 @@
 #include "readAmberInput.hpp"
 #include <assert.h>
+#include <algorithm>
+#include <string>
+#include <cctype>
 
-int readAmberInput::AtomNameSize = 4;
-TARGET_TYPE readAmberInput::chargemMultiplier = 18.2223;
-int readAmberInput::AmberIndexMultiplier = 3;
-int readAmberInput::AmberIndexDiff = 1;
+constexpr int ATOM_NAME_SIZE = 4;
+constexpr int AMBER_INDEX_MULTIPLIER = 3;
+constexpr int AMBER_INDEX_DIFF = 1;
 
+int numres = 0;
 
-
-void readAmberInput::readAmberFiles(std::string inpcrdfile, std::string prmtopfile)
+void AmberReader::readAmberFiles(const std::string& inpcrdfile, const std::string& prmtopfile)
 {
 
 try
 {
 
-  inpcrd.open(inpcrdfile.c_str());
-  if(!inpcrd.is_open())
-  {
-          printf("Error in inpcrd file : file not opened \n");
-          exit(1);
-  }
+  readInpcrd(inpcrdfile);
 
   prmtop.open(prmtopfile.c_str());
   if(!prmtop.is_open())
   {
-          printf("Error in prmtop file : file not opened \n");
+          printf("Error in prmtop file : %s file not opened \n", prmtopfile.c_str());
           exit(1);
   }
-
-
-  readInpcrd();
 
   while(!prmtop.eof())
   {
     getline(prmtop, line);
 
-    if (line.find("POINTERS") != std::string::npos)
+    if (line.find("FLAG POINTERS") != std::string::npos)
         readPointers();
     else if (line.find("CHARGE") != std::string::npos)
         readAtomsCharge();
+
+    else if (line.find("ATOMIC_NUMBER") != std::string::npos)
+        readAtomicNumber();
+
+    else if (line.find("RESIDUE_LABEL") != std::string::npos)
+        readResidueLabels();
+    else if (line.find("RESIDUE_POINTER") != std::string::npos)
+        readResiduePointers();
+
     else if (line.find("MASS") != std::string::npos)
         readAtomsMass();
     else if (line.find("FLAG RADII") != std::string::npos)
@@ -50,9 +53,10 @@ try
     else if (line.find("ATOM_NAME") != std::string::npos)
         readAtomsName();
     else if (line.find("AMBER_ATOM_TYPE") != std::string::npos)
-        readAtomsNameAlias();
+        readAtomsTypes();
     else if (line.find("NONBONDED_PARM_INDEX") != std::string::npos)
         readNonbondedParmIndex();
+
 
 
     else if (line.find("BOND_FORCE_CONSTANT") != std::string::npos)
@@ -100,7 +104,7 @@ try
         readLennardJonesBCOEF();
 
   }
-
+  
   readLennardJonesRVdWEpsilon();
 
 }
@@ -110,29 +114,65 @@ catch(std::exception e){
 }
 
 	GeneratePairStartAndLen();
-}
 
-void readAmberInput::readInpcrd(){
-  int natms_count = 0;
-  getline(inpcrd, line);
-  inpcrd >> NumberAtoms2;
-  while(!inpcrd.eof() && natms_count <= NumberAtoms2)
-  {
-      inpcrd >> temp_val; AtomsXcoord.push_back(temp_val);
-      inpcrd >> temp_val; AtomsYcoord.push_back(temp_val);
-      inpcrd >> temp_val; AtomsZcoord.push_back(temp_val);
+  // populate the interval tree for residue names
+  residuePointers.push_back(NumberAtoms + 1);
+  for (int i = 0; i < residueLabels.size(); i++) {
+    residueLabelTree.insert({
+      residuePointers[i] - 1,
+      residuePointers[i + 1] - 2,
+      residueLabels[i]
+    });
 
-      // std::cout << temp_val;
-      natms_count++;
+    residueIndexTree.insert({
+      residuePointers[i] - 1,
+      residuePointers[i + 1] - 2,
+      i + 1
+    });
   }
 }
 
-void readAmberInput::readPointers(){
+void AmberReader::readInpcrd(const std::string& inpcrdfile) {
+
+  try{
+    inpcrd.open(inpcrdfile.c_str());
+    if(!inpcrd.is_open())
+    {
+            printf("Error in inpcrd file : %s file not opened \n", inpcrdfile.c_str());
+            exit(1);
+    }
+      // Ignore the first line
+    getline(inpcrd, line);
+
+    // Next line contains one or two values
+    // The first is the number of atoms present in this file
+    // The second, if present, stores the simulation time
+    // We ignore both values
+    getline(inpcrd, line);
+
+    // Read the coordinates
+    SimTK::Real x, y, z;
+    while(inpcrd >> x >> y >> z) {
+      AtomsXcoord.push_back(x);
+      AtomsYcoord.push_back(y);
+      AtomsZcoord.push_back(z);
+    }
+
+    inpcrd.close();
+
+  }catch(std::exception e){
+    std::cout << "Error reading inpcrd file \n";
+    std::cout << e.what() << '\n';
+  }
+
+}
+
+void AmberReader::readPointers(){
       // draciile de mai jos au un motiv
       getline(prmtop, line);
-      for(i = 0; i <30 ; i++) //  30 used terms for sure...we need only some of them
+      for(global_i = 0; global_i <30 ; global_i++) //  30 used terms for sure...we need only some of them
       {
-           prmtop >> FlagPointers[i];
+           prmtop >> FlagPointers[global_i];
       }
 
       NumberAtoms = FlagPointers[0];
@@ -153,6 +193,7 @@ void readAmberInput::readPointers(){
       NumberDihedrals = NumberDihedralsH + NumberDihedralsNONH;
 
       NumberExcludedAtoms = FlagPointers[10];
+      numres = FlagPointers[11];
 
       NumberBondsTypes = FlagPointers[15];
       NumberAnglesTypes = FlagPointers[16];
@@ -160,78 +201,113 @@ void readAmberInput::readPointers(){
 
   }
 
-
-  void readAmberInput::readAtomsCharge(){
+  void AmberReader::readResidueLabels() {
     getline(prmtop, line);
-    for(i = 0; i < NumberAtoms; i++)
+    for(global_i = 0; global_i < numres; global_i++)
+    {
+      std::string label;
+      prmtop >> label;
+      residueLabels.push_back(label);
+    }
+  }
+
+  void AmberReader::readResiduePointers() {
+    getline(prmtop, line);
+    for(global_i = 0; global_i < numres; global_i++)
+    {
+      std::string label;
+      prmtop >> label;
+      residuePointers.push_back(std::stoi(label));
+    }
+  }
+
+  void AmberReader::readAtomsCharge(){
+    getline(prmtop, line);
+    for(global_i = 0; global_i < NumberAtoms; global_i++)
     {
          prmtop >> temp_val; AtomsCharge.push_back(temp_val);
     }
   }
 
-  void readAmberInput::readAtomsMass(){
+  void AmberReader::readAtomicNumber(){
     getline(prmtop, line);
-    for(i = 0; i < NumberAtoms; i++)
+    for(global_i = 0; global_i < NumberAtoms; global_i++)
+    {
+         prmtop >> temp_val; AtomicNumbers.push_back(temp_val);
+    }
+  }
+
+  void AmberReader::readAtomsMass(){
+    getline(prmtop, line);
+    for(global_i = 0; global_i < NumberAtoms; global_i++)
     {
          prmtop >> temp_val; AtomsMass.push_back(temp_val);
     }
   }
 
-  void readAmberInput::readAtomsRadii(){
+  void AmberReader::readAtomsRadii(){
     getline(prmtop, line);
-    for(i = 0; i < NumberAtoms; i++)
+    for(global_i = 0; global_i < NumberAtoms; global_i++)
     {
          prmtop >> temp_val; AtomsRadii.push_back(temp_val);
     }
   }
 
-  void readAmberInput::readAtomsScreenGBIS(){
+  void AmberReader::readAtomsScreenGBIS(){
     getline(prmtop, line);
-    for(i = 0; i < NumberAtoms; i++)
+    for(global_i = 0; global_i < NumberAtoms; global_i++)
     {
          prmtop >> temp_val; AtomsScreenGBIS.push_back(temp_val);
     }
   }
 
-  void readAmberInput::readAtomsTypesIndex(){
+  void AmberReader::readAtomsTypesIndex(){
     getline(prmtop, line);
-    for(i = 0; i < NumberAtoms; i++)
+    for(global_i = 0; global_i < NumberAtoms; global_i++)
     {
          prmtop >> temp_val; AtomsTypesIndex.push_back(temp_val);
     }
   }
 
-  void readAmberInput::readAtomsName(){
+  void AmberReader::readAtomsName(){
     getline(prmtop, line); // format flag
-    i=0;
-    while(line.find("FLAG") == std::string::npos && i < NumberAtoms) // if stays within same field
+    global_i=0;
+    while(line.find("FLAG") == std::string::npos && global_i < NumberAtoms) // if stays within same field
     {
       getline(prmtop, line);
-      for(unsigned int k=0; k + readAmberInput::AtomNameSize <=line.length(); k += readAmberInput::AtomNameSize )
+      for(unsigned int k=0; k + ATOM_NAME_SIZE <=line.length(); k += ATOM_NAME_SIZE )
       {
-        AtomsName.push_back(line.substr(k, readAmberInput::AtomNameSize ));
-        i++;
+        auto name = line.substr(k, ATOM_NAME_SIZE );
+        auto it = std::remove_if(name.begin(), name.end(), [](char& c) {return std::isspace<char>(c, std::locale::classic()); });
+        name.erase(it, name.end());
+
+        AtomsName.push_back(name);
+        global_i++;
       }
     }
   }
-  void readAmberInput::readAtomsNameAlias(){
+  void AmberReader::readAtomsTypes(){
     getline(prmtop, line); // format flag
-    i=0;
-    while(line.find("FLAG") == std::string::npos && i < NumberAtoms) // if stays within same field
+    global_i=0;
+    while(line.find("FLAG") == std::string::npos && global_i < NumberAtoms) // if stays within same field
     {
       getline(prmtop, line);
-      for(unsigned int k=0; k + readAmberInput::AtomNameSize <=line.length(); k += readAmberInput::AtomNameSize )
+      for(unsigned int k=0; k + ATOM_NAME_SIZE <=line.length(); k += ATOM_NAME_SIZE )
       {
-        AtomsNameAlias.push_back(line.substr(k, readAmberInput::AtomNameSize ));
-        i++;
+        auto name = line.substr(k, ATOM_NAME_SIZE );
+        auto it = std::remove_if(name.begin(), name.end(), [](char& c) {return std::isspace<char>(c, std::locale::classic()); });
+        name.erase(it, name.end());
+
+        AtomsTypes.push_back(name);
+        global_i++;
       }
     }
   }
 
 
-  void readAmberInput::readNonbondedParmIndex(){
+  void AmberReader::readNonbondedParmIndex(){
     getline(prmtop, line);
-    for(i = 0; i < (NumberTypes * NumberTypes); i++)
+    for(global_i = 0; global_i < (NumberTypes * NumberTypes); global_i++)
     {
          prmtop >> temp_val; LennardJonesNonbondParmIndex.push_back(temp_val);
          if(temp_val < 0){
@@ -241,114 +317,118 @@ void readAmberInput::readPointers(){
     }
   }
 
-
-  void readAmberInput::readTempBondsForceK(){
+  void AmberReader::readTempBondsForceK(){
     getline(prmtop, line);
-    for(i = 0; i < NumberBondsTypes; i++)
+    for(global_i = 0; global_i < NumberBondsTypes; global_i++)
     {
          prmtop >>  temp_val; tempBond_K.push_back(temp_val);
     }
   }
 
-  void readAmberInput::readTempBondsEqval(){
+  void AmberReader::readTempBondsEqval(){
     getline(prmtop, line);
-    for(i = 0; i < NumberBondsTypes; i++)
+    for(global_i = 0; global_i < NumberBondsTypes; global_i++)
     {
          prmtop >>  temp_val; tempBond_eq.push_back(temp_val);
     }
   }
 
-  void readAmberInput::readBonds(int nr){
+  void AmberReader::readBonds(int nr){
     getline(prmtop, line);
-    for(i = 0; i < nr; i++)
+    for(global_i = 0; global_i < nr; global_i++)
     {
       prmtop >> t1;
       prmtop >> t2;
       prmtop >> t3;
 
-      BondsAtomsIndex.push_back(std::vector<int> { t1 / readAmberInput::AmberIndexMultiplier , t2 / readAmberInput::AmberIndexMultiplier});
-      BondsForceK.push_back(tempBond_K[ t3 - readAmberInput::AmberIndexDiff]);
-      BondsEqval.push_back(tempBond_eq[ t3 - readAmberInput::AmberIndexDiff]);
+      BondsAtomsIndex.push_back(std::vector<int> {
+        t1 / AMBER_INDEX_MULTIPLIER , 
+        t2 / AMBER_INDEX_MULTIPLIER});
+      BondsForceK.push_back(tempBond_K[ t3 - AMBER_INDEX_DIFF]);
+      BondsEqval.push_back(tempBond_eq[ t3 - AMBER_INDEX_DIFF]);
     }
   }
 
 
-  void readAmberInput::readTempAnglesForceK(){
+  void AmberReader::readTempAnglesForceK(){
     getline(prmtop, line);
-    for(i = 0; i < NumberAnglesTypes; i++)
+    for(global_i = 0; global_i < NumberAnglesTypes; global_i++)
     {
          prmtop >>  temp_val; tempAngle_K.push_back(temp_val);
     }
   }
 
-  void readAmberInput::readTempAnglesEqval(){
+  void AmberReader::readTempAnglesEqval(){
     getline(prmtop, line);
-    for(i = 0; i < NumberAnglesTypes; i++)
+    for(global_i = 0; global_i < NumberAnglesTypes; global_i++)
     {
          prmtop >>  temp_val; tempAngle_eq.push_back(temp_val);
     }
   }
 
-  void readAmberInput::readAngles(int nr){
+  void AmberReader::readAngles(int nr){
     getline(prmtop, line);
-    for(i = 0; i < nr; i++)
+    for(global_i = 0; global_i < nr; global_i++)
     {
       prmtop >> t1;
       prmtop >> t2;
       prmtop >> t3;
       prmtop >> t4;
 
-      AnglesAtomsIndex.push_back(std::vector<int> { t1 / readAmberInput::AmberIndexMultiplier , t2 / readAmberInput::AmberIndexMultiplier, t3 / readAmberInput::AmberIndexMultiplier});
-      AnglesForceK.push_back(tempAngle_K[ t4 - readAmberInput::AmberIndexDiff]);
-      AnglesEqval.push_back(tempAngle_eq[ t4 - readAmberInput::AmberIndexDiff]);
+      AnglesAtomsIndex.push_back(std::vector<int> {
+        t1 / AMBER_INDEX_MULTIPLIER ,
+        t2 / AMBER_INDEX_MULTIPLIER,
+        t3 / AMBER_INDEX_MULTIPLIER});
+      AnglesForceK.push_back(tempAngle_K[ t4 - AMBER_INDEX_DIFF]);
+      AnglesEqval.push_back(tempAngle_eq[ t4 - AMBER_INDEX_DIFF]);
     }
   }
 
 
 
 
-  void readAmberInput::readTempDihedralsForceK(){
+  void AmberReader::readTempDihedralsForceK(){
     getline(prmtop, line);
-    for(i = 0; i < NumberDihedralsTypes; i++)
+    for(global_i = 0; global_i < NumberDihedralsTypes; global_i++)
     {
          prmtop >>  temp_val; tempDihedral_K.push_back(temp_val);
     }
   }
 
-  void readAmberInput::readTempDihedralsPhase(){
+  void AmberReader::readTempDihedralsPhase(){
     getline(prmtop, line);
-    for(i = 0; i < NumberDihedralsTypes; i++)
+    for(global_i = 0; global_i < NumberDihedralsTypes; global_i++)
     {
          prmtop >>  temp_val; tempDihedral_phase.push_back(temp_val);
     }
   }
 
-  void readAmberInput::readTempDihedralsPeriod(){
+  void AmberReader::readTempDihedralsPeriod(){
     getline(prmtop, line);
-    for(i = 0; i < NumberDihedralsTypes; i++)
+    for(global_i = 0; global_i < NumberDihedralsTypes; global_i++)
     {
          prmtop >>  temp_val; tempDihedral_per.push_back(temp_val);
     }
   }
-  void readAmberInput::readTempSCEEScaleFactor(){
+  void AmberReader::readTempSCEEScaleFactor(){
     getline(prmtop, line);
-    for(i = 0; i < NumberDihedralsTypes; i++)
+    for(global_i = 0; global_i < NumberDihedralsTypes; global_i++)
     {
          prmtop >>  temp_val; tempDihedral_SCEE.push_back(temp_val);
     }
   }
-  void readAmberInput::readTempSCNBScaleFactor(){
+  void AmberReader::readTempSCNBScaleFactor(){
     getline(prmtop, line);
-    for(i = 0; i < NumberDihedralsTypes; i++)
+    for(global_i = 0; global_i < NumberDihedralsTypes; global_i++)
     {
          prmtop >>  temp_val; tempDihedral_SCNB.push_back(temp_val);
     }
   }
 
 
-  void readAmberInput::readDihedrals(int nr){
+  void AmberReader::readDihedrals(int nr){
     getline(prmtop, line);
-    for(i = 0; i < nr; i++)
+    for(global_i = 0; global_i < nr; global_i++)
     {
       prmtop >> t1;
       prmtop >> t2;
@@ -356,48 +436,68 @@ void readAmberInput::readPointers(){
       prmtop >> t4;
       prmtop >> t5;
 
-      DihedralsAtomsIndex.push_back(std::vector<int> { abs(t1 / readAmberInput::AmberIndexMultiplier) , abs(t2 / readAmberInput::AmberIndexMultiplier), abs(t3 / readAmberInput::AmberIndexMultiplier), abs(t4 / readAmberInput::AmberIndexMultiplier)});
-      DihedralsForceK.push_back(tempDihedral_K[ t5 - readAmberInput::AmberIndexDiff]);
-      DihedralsPeriod.push_back(tempDihedral_per[ t5 - readAmberInput::AmberIndexDiff]);
-      DihedralsPhase.push_back(tempDihedral_phase[ t5 - readAmberInput::AmberIndexDiff]);
+      DihedralsAtomsIndex.push_back(std::vector<int> {
+        abs(t1 / AMBER_INDEX_MULTIPLIER), // AmberIndexMultiplier=3
+        abs(t2 / AMBER_INDEX_MULTIPLIER),
+        abs(t3 / AMBER_INDEX_MULTIPLIER), 
+        abs(t4 / AMBER_INDEX_MULTIPLIER)});
+
+      DihedralsForceK.push_back(
+        tempDihedral_K[ t5 - AMBER_INDEX_DIFF]); // AmberIndexDiff=1
+      DihedralsPeriod.push_back(
+        tempDihedral_per[ t5 - AMBER_INDEX_DIFF]);
+      DihedralsPhase.push_back(
+        tempDihedral_phase[ t5 - AMBER_INDEX_DIFF]);
     }
+
+    /* std::cout << "readAmberInput::readDihedrals " << nr << "\n" ;
+    for(int i = 0; i < DihedralsAtomsIndex.size(); i++){
+
+    //   for(int j = 0; j < DihedralsAtomsIndex[i].size(); j++){
+    //     std::cout << DihedralsAtomsIndex[i][j] << " ";
+    //   }
+    
+    //   std::cout << DihedralsForceK[i] << " " << DihedralsPeriod[i] << " " << DihedralsPhase[i] << std::endl;
+
+    } */
+
   }
 
 
 
 
 
-    void readAmberInput::readLennardJonesACOEF(){
+    void AmberReader::readLennardJonesACOEF(){
       getline(prmtop, line);
-      for(i = 0; i < LennardJonesTypes; i++)
+      for(global_i = 0; global_i < LennardJonesTypes; global_i++)
       {
            prmtop >>  temp_val; tempLJONES_ACOEFF.push_back(temp_val);
       }
     }
-    void readAmberInput::readLennardJonesBCOEF(){
+    void AmberReader::readLennardJonesBCOEF(){
       getline(prmtop, line);
-      for(i = 0; i < LennardJonesTypes; i++)
+      for(global_i = 0; global_i < LennardJonesTypes; global_i++)
       {
            prmtop >>  temp_val; tempLJONES_BCOEFF.push_back(temp_val);
       }
     }
 
-    void readAmberInput::readLennardJonesRVdWEpsilon(){
+    void AmberReader::readLennardJonesRVdWEpsilon(){
     // adapted from OpenMM - amber_file_parser.py
 
-    TARGET_TYPE typeRVdW[NumberTypes];
-    TARGET_TYPE typeEpsilon[NumberTypes];
+    SimTK::Real typeRVdW[NumberTypes];
+    SimTK::Real typeEpsilon[NumberTypes];
 
-    TARGET_TYPE rmin;
-    TARGET_TYPE eps;
+    SimTK::Real rmin;
+    SimTK::Real eps;
 
 
-      for(i = 0; i < NumberAtoms; i++)
+      for(global_i = 0; global_i < NumberAtoms; global_i++)
       {
 
-          // int index = LennardJonesNonbondParmIndex[ ((NumberTypes + 1)*(AtomsTypesIndex[i] - 1)) ] -1;
+          // int index = LennardJonesNonbondParmIndex[ ((NumberTypes + 1)*(AtomsTypesIndex[global_i] - 1)) ] -1;
 
-          int ind = NumberTypes*(AtomsTypesIndex[i] - 1) + AtomsTypesIndex[i] - 1;
+          int ind = NumberTypes*(AtomsTypesIndex[global_i] - 1) + AtomsTypesIndex[global_i] - 1;
           int index = LennardJonesNonbondParmIndex[ ind ] - 1;
 
           if( index < 0)
@@ -414,30 +514,30 @@ void readAmberInput::readPointers(){
             eps = (0.25f*bcoef*bcoef) /acoef ;
           }
           else{
-              rmin = 0.05f;
+              rmin = 0.5f;
               eps = 0.0f;
           }
 
           AtomsRVdW.push_back(rmin);
           AtomsEpsilon.push_back(eps);
 
-          typeRVdW[ AtomsTypesIndex[i] - 1 ] = rmin;
-          typeEpsilon[ AtomsTypesIndex[i] - 1 ] = eps;
+          typeRVdW[ AtomsTypesIndex[global_i] - 1 ] = rmin;
+          typeEpsilon[ AtomsTypesIndex[global_i] - 1 ] = eps;
 
       }
 
       // Check if off-diagonal LJ terms
-      for(i = 0; i < NumberTypes; i++)
+      for(global_i = 0; global_i < NumberTypes; global_i++)
       {
         for(int j = 0; j < NumberTypes; j++)
         {
-            int index = LennardJonesNonbondParmIndex[ NumberTypes * i + j ] - 1;
+            int index = LennardJonesNonbondParmIndex[ NumberTypes * global_i + j ] - 1;
             if (index < 0 )
             {
-              TARGET_TYPE rij = typeRVdW[i] + typeRVdW[j];
-              TARGET_TYPE wij = sqrt( typeEpsilon[i] * typeEpsilon[j] );
-              TARGET_TYPE pairA = tempLJONES_ACOEFF[index];
-              TARGET_TYPE pairB = tempLJONES_BCOEFF[index];
+              SimTK::Real rij = typeRVdW[global_i] + typeRVdW[j];
+              SimTK::Real wij = sqrt( typeEpsilon[global_i] * typeEpsilon[j] );
+              SimTK::Real pairA = tempLJONES_ACOEFF[index];
+              SimTK::Real pairB = tempLJONES_BCOEFF[index];
 
               // Check for 0 terms
               if( ( pairA * pairB ==0 && ( pairA + pairB != 0 || wij * rij !=0 )))
@@ -447,8 +547,8 @@ void readAmberInput::readPointers(){
               }
               // Check for small terms
 
-              TARGET_TYPE termA = ( pairA - (wij * pow(rij, 12) ) ) / pairA;
-              TARGET_TYPE termB = ( pairB - ( 2* wij * pow(rij, 6) ) ) / pairB;
+              SimTK::Real termA = ( pairA - (wij * pow(rij, 12) ) ) / pairA;
+              SimTK::Real termB = ( pairB - ( 2* wij * pow(rij, 6) ) ) / pairB;
 
               if ( abs(termA) > pow(10, -6) || abs(termB) > pow(10, -6) )
               {
@@ -464,47 +564,47 @@ void readAmberInput::readPointers(){
 
     }
 
-    void readAmberInput::readNumberExcludedAtomsList(){
+    void AmberReader::readNumberExcludedAtomsList(){
       getline(prmtop, line);
-      for(i = 0; i < NumberAtoms; i++)
+      for(global_i = 0; global_i < NumberAtoms; global_i++)
       {
            prmtop >> temp_val; NumberExcludedAtomsList.push_back(temp_val);
       }
     }
 
-    void readAmberInput::readExcludedAtomsList(){
+    void AmberReader::readExcludedAtomsList(){
       getline(prmtop, line);
 
 
       // create NonBondedAtomsMatrix
-      for(i = 0; i < NumberAtoms; i++)
+      for(global_i = 0; global_i < NumberAtoms; global_i++)
       {
         std::vector<bool> row;
         for( int j = 0; j < NumberAtoms; j++)
         {
-          row.push_back(i!=j);
+          row.push_back(global_i!=j);
         }
         NonBondedAtomsMatrix.push_back(row);
       }
 
-      i = 0;
-      while ( i < NumberAtoms )
+      global_i = 0;
+      while ( global_i < NumberAtoms )
       {
            // eliminates pairs involve in bonded interactions
            int count = 1;
-           while( count <= NumberExcludedAtomsList[i])
+           while( count <= NumberExcludedAtomsList[global_i])
            {
              prmtop >> temp_val;
 
              if(temp_val != 0)
              {
-                NonBondedAtomsMatrix[ i ][ temp_val - 1 ] = 0;
-                NonBondedAtomsMatrix[ temp_val - 1 ][ i ] = 0;
+                NonBondedAtomsMatrix[ global_i ][ temp_val - 1 ] = 0;
+                NonBondedAtomsMatrix[ temp_val - 1 ][ global_i ] = 0;
              }
 
              count++;
            }
-           i++;
+           global_i++;
       }
     }
 
@@ -516,150 +616,209 @@ void readAmberInput::readPointers(){
 // GET FUNCTIONS
 
 
-int readAmberInput::getNumberAtoms(){
+int AmberReader::getNumberAtoms() const {
   return NumberAtoms;
 }
 
-int readAmberInput::getNumberBonds(){
+int AmberReader::getNumberBonds() const {
   return NumberBonds;
 }
 
-int readAmberInput::getNumberAngles(){
+int AmberReader::getNumberAngles() const {
   return NumberAngles;
 }
 
-int readAmberInput::getNumberDihedrals(){
+int AmberReader::getNumberDihedrals() const {
   return NumberDihedrals;
 }
 
 
-std::string readAmberInput::getAtomsName(int p){
+const std::string& AmberReader::getAtomsName(int p) const {
   return AtomsName[p];
 }
 
-std::string readAmberInput::getAtomsNameAlias(int p){
-  return AtomsNameAlias[p];
+const std::string& AmberReader::getAtomsType(int p) const {
+  return AtomsTypes[p];
 }
 
 
-TARGET_TYPE readAmberInput::getAtomsXcoord(int p){
+SimTK::Real AmberReader::getAtomsXcoord(int p) const {
   return AtomsXcoord[p];
 }
-TARGET_TYPE readAmberInput::getAtomsYcoord(int p){
+SimTK::Real AmberReader::getAtomsYcoord(int p) const {
   return AtomsYcoord[p];
 }
-TARGET_TYPE readAmberInput::getAtomsZcoord(int p){
+SimTK::Real AmberReader::getAtomsZcoord(int p) const {
   return AtomsZcoord[p];
 }
-TARGET_TYPE readAmberInput::getAtomsMass(int p){
+SimTK::Real AmberReader::getAtomsMass(int p) const {
   return AtomsMass[p];
 }
-TARGET_TYPE readAmberInput::getAtomsCharge(int p){
+SimTK::Real AmberReader::getAtomsCharge(int p) const {
   return AtomsCharge[p];
 }
-TARGET_TYPE readAmberInput::getAtomsRadii(int p){
+SimTK::Real AmberReader::getAtomsRadii(int p) const {
   return AtomsRadii[p];
 }
-TARGET_TYPE readAmberInput::getAtomsRVdW(int p){
+SimTK::Real AmberReader::getAtomsRVdW(int p) const {
   return AtomsRVdW[p];
 }
-TARGET_TYPE readAmberInput::getAtomsEpsilon(int p){
+SimTK::Real AmberReader::getAtomsEpsilon(int p) const {
   return AtomsEpsilon[p];
 }
 
+SimTK::Real AmberReader::getAtomicNumber(int p) const {
+  return AtomicNumbers[p];
+}
 
-
-int readAmberInput::getBondsAtomsIndex1(int bond){
+int AmberReader::getBondsAtomsIndex1(int bond) const {
   return BondsAtomsIndex[bond][0];
 }
-int readAmberInput::getBondsAtomsIndex2(int bond){
+int AmberReader::getBondsAtomsIndex2(int bond) const {
   return BondsAtomsIndex[bond][1];
 }
-TARGET_TYPE readAmberInput::getBondsForceK(int bond){
+SimTK::Real AmberReader::getBondsForceK(int bond) const {
   return BondsForceK[bond];
 }
-TARGET_TYPE readAmberInput::getBondsEqval(int bond){
+SimTK::Real AmberReader::getBondsEqval(int bond) const {
   return BondsEqval[bond];
 }
 
 
 
 
-int readAmberInput::getAnglesAtomsIndex1(int angle){
+int AmberReader::getAnglesAtomsIndex1(int angle) const {
   return AnglesAtomsIndex[angle][0];
 }
-int readAmberInput::getAnglesAtomsIndex2(int angle){
+int AmberReader::getAnglesAtomsIndex2(int angle) const {
   return AnglesAtomsIndex[angle][1];
 }
-int readAmberInput::getAnglesAtomsIndex3(int angle){
+int AmberReader::getAnglesAtomsIndex3(int angle) const {
   return AnglesAtomsIndex[angle][2];
 }
-TARGET_TYPE readAmberInput::getAnglesForceK(int angle){
+SimTK::Real AmberReader::getAnglesForceK(int angle) const {
   return AnglesForceK[angle];
 }
-TARGET_TYPE readAmberInput::getAnglesEqval(int angle){
+SimTK::Real AmberReader::getAnglesEqval(int angle) const {
   return AnglesEqval[angle];
 }
 
 
 
-int readAmberInput::getDihedralsAtomsIndex1(int dihedral){
+int AmberReader::getDihedralsAtomsIndex1(int dihedral) const {
   return DihedralsAtomsIndex[dihedral][0];
 }
-int readAmberInput::getDihedralsAtomsIndex2(int dihedral){
+int AmberReader::getDihedralsAtomsIndex2(int dihedral) const {
   return DihedralsAtomsIndex[dihedral][1];
 }
-int readAmberInput::getDihedralsAtomsIndex3(int dihedral){
+int AmberReader::getDihedralsAtomsIndex3(int dihedral) const {
   return DihedralsAtomsIndex[dihedral][2];
 }
-int readAmberInput::getDihedralsAtomsIndex4(int dihedral){
+int AmberReader::getDihedralsAtomsIndex4(int dihedral) const {
   return DihedralsAtomsIndex[dihedral][3];
 }
 
-int readAmberInput::getDihedralsAtomsIndex(int dihIndex, int atomIndx)
+int AmberReader::getDihedralsAtomsIndex(int dihIndex, int atomIndx)
 {
 	assert( atomIndx > 0 && atomIndx < 4 );
 	return DihedralsAtomsIndex[ dihIndex ][ atomIndx ];
 }
 
 //HOREA
-void readAmberInput::GeneratePairStartAndLen()
+/* void readAmberInput::GeneratePairStartAndLen()
 {
-	std::vector<int> currentDihedralIndices = DihedralsAtomsIndex[0];
-	PairStartAndLen.push_back( std::make_pair(0,1) );
+  if( DihedralsAtomsIndex.size() ){
+    std::vector<int> currentDihedralIndices = DihedralsAtomsIndex[0];
+    PairStartAndLen.push_back( std::make_pair(0,1) );
 
-	for(unsigned int idx = 1 ; idx < DihedralsAtomsIndex.size() ; idx++ )
-	{
-		if( currentDihedralIndices[0] == DihedralsAtomsIndex[i][0] &&
-		    currentDihedralIndices[1] == DihedralsAtomsIndex[i][1] &&
-		    currentDihedralIndices[2] == DihedralsAtomsIndex[i][2] &&
-		    currentDihedralIndices[3] == DihedralsAtomsIndex[i][3] )
-		{
-			PairStartAndLen[ PairStartAndLen.size() -1 ].second ++;
-		}
-		else {
-			int nextIndx = PairStartAndLen.back().first;
-			PairStartAndLen.push_back( std::make_pair( nextIndx + 1, 1) );
-		}
-	}
+    for(unsigned int idx = 1 ; idx < DihedralsAtomsIndex.size() ; idx++ )
+    {
+      if( currentDihedralIndices[0] == DihedralsAtomsIndex[idx][0] &&
+          currentDihedralIndices[1] == DihedralsAtomsIndex[idx][1] &&
+          currentDihedralIndices[2] == DihedralsAtomsIndex[idx][2] &&
+          currentDihedralIndices[3] == DihedralsAtomsIndex[idx][3] )
+      {
+        PairStartAndLen[ PairStartAndLen.size() -1 ].second ++;
+      }
+      else {
+        int nextIndx = PairStartAndLen.back().first;
+        PairStartAndLen.push_back( std::make_pair( nextIndx + 1, 1) );
+      }
+    }
+  }
+	
+} */
+
+// Laurentiu
+void AmberReader::GeneratePairStartAndLen()
+{
+  if( DihedralsAtomsIndex.size() ){
+
+    std::vector<int> currentDihedralIndices = DihedralsAtomsIndex[0];
+    PairStartAndLen.push_back( std::make_pair(0,0) );
+    int idx = 0;
+
+    while(idx < DihedralsAtomsIndex.size())
+    {
+
+      if( currentDihedralIndices[0] == DihedralsAtomsIndex[idx][0] &&
+          currentDihedralIndices[1] == DihedralsAtomsIndex[idx][1] &&
+          currentDihedralIndices[2] == DihedralsAtomsIndex[idx][2] &&
+          currentDihedralIndices[3] == DihedralsAtomsIndex[idx][3] )
+      {
+        PairStartAndLen[ PairStartAndLen.size() - 1 ].second ++;
+      }
+      else {
+        //int nextIndx = PairStartAndLen.back().first;
+        int nextIndx = idx;
+        PairStartAndLen.push_back( std::make_pair( nextIndx, 1) );
+
+        currentDihedralIndices[0] = DihedralsAtomsIndex[idx][0];
+        currentDihedralIndices[1] = DihedralsAtomsIndex[idx][1];
+        currentDihedralIndices[2] = DihedralsAtomsIndex[idx][2];
+        currentDihedralIndices[3] = DihedralsAtomsIndex[idx][3];
+
+      }
+
+/*
+      std::cout << "GeneratePairStartAndLen " 
+        << " " << DihedralsAtomsIndex[idx][0] << " " << DihedralsAtomsIndex[idx][1]
+        << " " << DihedralsAtomsIndex[idx][2] << " " << DihedralsAtomsIndex[idx][3]
+        << " || " << PairStartAndLen[ PairStartAndLen.size() - 1 ].first
+        << " " << PairStartAndLen[ PairStartAndLen.size() - 1 ].second
+        << std::endl << std::flush;
+*/
+      idx++;
+
+    }
+  }
+	
 }
 
-std::vector < std::pair<int, int> > readAmberInput::getPairStartAndLen()
+std::vector < std::pair<int, int> > AmberReader::getPairStartAndLen() const
 {
 	return PairStartAndLen;
 }
 
 
-TARGET_TYPE readAmberInput::getDihedralsForceK(int dihedral){
+SimTK::Real AmberReader::getDihedralsForceK(int dihedral) const {
   return DihedralsForceK[dihedral];
 }
-TARGET_TYPE readAmberInput::getDihedralsPhase(int dihedral){
+SimTK::Real AmberReader::getDihedralsPhase(int dihedral) const {
   return DihedralsPhase[dihedral];
 }
-TARGET_TYPE readAmberInput::getDihedralsPeriod(int dihedral){
+SimTK::Real AmberReader::getDihedralsPeriod(int dihedral) const {
   return DihedralsPeriod[dihedral];
 }
 
-bool readAmberInput::getNonBondedAtomsMatrix(int at1, int at2){
+bool AmberReader::getNonBondedAtomsMatrix(int at1, int at2) const {
   return NonBondedAtomsMatrix[at1][at2];
+}
+
+const std::string& AmberReader::getResidueLabel(int i) const {
+  return residueLabelTree.get(i);
+}
+
+int AmberReader::getResidueIndex(int i) const {
+  return residueIndexTree.get(i);
 }

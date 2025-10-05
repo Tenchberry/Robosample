@@ -8,17 +8,17 @@ Implementation of GirolamiSampler class. **/
 #include "Topology.hpp"
 
 //** Constructor **/
-GirolamiSampler::GirolamiSampler(SimTK::CompoundSystem *argCompoundSystem,
-                                     SimTK::SimbodyMatterSubsystem *argMatter,
-                                     SimTK::Compound *argResidue,
-                                     SimTK::DuMMForceFieldSubsystem *argDumm,
-                                     SimTK::GeneralForceSubsystem *argForces,
-                                     SimTK::TimeStepper *argTimeStepper)
-    : HamiltonianMonteCarloSampler(argCompoundSystem, argMatter, argResidue, argDumm, argForces, argTimeStepper)
-    , MonteCarloSampler(argCompoundSystem, argMatter, argResidue, argDumm, argForces, argTimeStepper)
-    , Sampler(argCompoundSystem, argMatter, argResidue, argDumm, argForces, argTimeStepper)
+GirolamiSampler::GirolamiSampler(World &argWorld,
+		SimTK::CompoundSystem &argCompoundSystem,
+		SimTK::SimbodyMatterSubsystem &argMatter,
+		std::vector<Topology> &argTopologies, 
+		SimTK::DuMMForceFieldSubsystem &argDumm,
+		SimTK::GeneralForceSubsystem &argForces,
+		SimTK::TimeStepper &argTimeStepper) :
+        Sampler(argWorld, argCompoundSystem, argMatter, argTopologies, argDumm, argForces, argTimeStepper),
+        //MonteCarloSampler(argWorld, argCompoundSystem, argMatter, argTopologies, argDumm, argForces, argTimeStepper),
+        HMCSampler(argWorld, argCompoundSystem, argMatter, argTopologies, argDumm, argForces, argTimeStepper)
 {
-    this->useFixmanTorque = true;  
 }
 
 /** Destructor **/
@@ -49,7 +49,6 @@ void GirolamiSampler::initialize(SimTK::State& someState, SimTK::Real timestep, 
     int i = 0;
     for (SimTK::MobilizedBodyIndex mbx(1); mbx < matter->getNumBodies(); ++mbx){
         const SimTK::MobilizedBody& mobod = matter->getMobilizedBody(mbx);
-        const SimTK::Vec3& vertex = mobod.getBodyOriginLocation(someState);
         SetTVector[i] = TVector[i] = mobod.getMobilizerTransform(someState);
         i++;
     }
@@ -82,12 +81,12 @@ void GirolamiSampler::initialize(SimTK::State& someState, SimTK::Real timestep, 
     system->realize(someState, SimTK::Stage::Velocity);
 
     // Store kinetic energies
-    setProposedKE(matter->calcKineticEnergy(someState));
-    setLastAcceptedKE(getProposedKE());
+    setOldKE(matter->calcKineticEnergy(someState));
+    setSetKE(getOldKE());
 
     // Store total energies
-    this->etot_proposed = getOldPE() + getProposedKE() + getOldFixman();
-    this->etot_set = this->etot_proposed;
+    this->etot_o = getOldPE() + getOldKE() + getOldFixman();
+    this->etot_set = this->etot_o;
   
 }
 
@@ -107,7 +106,6 @@ void GirolamiSampler::reinitialize(SimTK::State& someState, SimTK::Real timestep
     int i = 0;
     for (SimTK::MobilizedBodyIndex mbx(1); mbx < matter->getNumBodies(); ++mbx){
         const SimTK::MobilizedBody& mobod = matter->getMobilizedBody(mbx);
-        const SimTK::Vec3& vertex = mobod.getBodyOriginLocation(someState);
         SetTVector[i] = TVector[i] = mobod.getMobilizerTransform(someState);
         i++;
     }
@@ -139,12 +137,12 @@ void GirolamiSampler::reinitialize(SimTK::State& someState, SimTK::Real timestep
     system->realize(someState, SimTK::Stage::Velocity);
 
     // Store kinetic energies
-    setProposedKE(matter->calcKineticEnergy(someState));
-    setLastAcceptedKE(getProposedKE());
+    setOldKE(matter->calcKineticEnergy(someState));
+    setSetKE(getOldKE());
 
     // Store total energies
-    this->etot_proposed = getOldPE() + getProposedKE() + getOldFixman();
-    this->etot_set = this->etot_proposed;
+    this->etot_o = getOldPE() + getOldKE() + getOldFixman();
+    this->etot_set = this->etot_o;
 
 }
 
@@ -152,7 +150,7 @@ void GirolamiSampler::reinitialize(SimTK::State& someState, SimTK::Real timestep
 algorithm. It essentially propagates the trajectory after it stores
 the configuration and energies. TODO: break in two functions:
 initializeVelocities and propagate/integrate **/
-void GirolamiSampler::propose(SimTK::State& someState, SimTK::Real timestep, int nosteps)
+bool GirolamiSampler::propose(SimTK::State& someState, SimTK::Real timestep, int nosteps)
 {
     // Seed the random number generator every move
     //randomEngine.seed(4294653137UL); // for reproductibility
@@ -219,10 +217,10 @@ void GirolamiSampler::propose(SimTK::State& someState, SimTK::Real timestep, int
 
     // Store the proposed kinetic energy
     system->realize(someState, SimTK::Stage::Velocity);
-    setProposedKE(matter->calcKineticEnergy(someState));
+    setOldKE(matter->calcKineticEnergy(someState));
 
     // Store the proposed total energy
-    this->etot_proposed = getOldPE() + getProposedKE() + getOldFixman();
+    this->etot_o = getOldPE() + getOldKE() + getOldFixman();
 
     // TODEL
 ////    std::cout << "Qs and Us before stepTo:" << std::endl;
@@ -239,6 +237,10 @@ void GirolamiSampler::propose(SimTK::State& someState, SimTK::Real timestep, int
 ////    PrintBigMat(someState.getU(), someState.getNU(), 3, "U");
     // END TODEL
 
+    // TODO
+    assert(!"What should we return here?");
+    return true;
+
 }
 
 /** Main function that contains all the 3 steps of HMC.
@@ -252,37 +254,32 @@ void GirolamiSampler::update(SimTK::State& someState, SimTK::Real timestep, int 
     propose(someState, timestep, nosteps);
 
     // Get needed energies
-    SimTK::Real pe_o  = getOldPE();
+    pe_o  = getOldPE();
     if(useFixman){
-        SimTK::Real fix_o = getOldFixman();
+        fix_o = getOldFixman();
     }
-    SimTK::Real ke_proposed  = getProposedKE();
+    ke_o  = getOldKE();
 
     if(useFixman){
         fix_n = calcFixman(someState);
     }else{
         fix_n = 0.0;
     }
-    SimTK::Real pe_n = getPEFromEvaluator(someState); // OPENMM
+    pe_n = getPEFromEvaluator(someState); // OPENMM
 
     system->realize(someState, SimTK::Stage::Velocity);
-    SimTK::Real ke_n = matter->calcKineticEnergy(someState);
+    ke_n = matter->calcKineticEnergy(someState);
 
-    SimTK::Real etot_proposed, etot_n;
     if(useFixman){
         etot_n = pe_n + ke_n + fix_n;
-        etot_proposed = pe_o + ke_proposed + fix_o;
+        etot_o = pe_o + ke_o + fix_o;
     }else{
         etot_n = pe_n + ke_n;
-        etot_proposed = pe_o + ke_proposed;
+        etot_o = pe_o + ke_o;
     }
 
-    etot_proposed;
-    etot_n;
-
-
     std::cout<<std::setprecision(5)<<std::fixed;
-    std::cout << "pe_o " << pe_o + getREP() << " ke_o " << ke_proposed << " fix_o " << fix_o << " rep " << getREP()
+    std::cout << "pe_o " << pe_o + getREP() << " ke_o " << ke_o << " fix_o " << fix_o << " rep " << getREP()
         << " pe_n " << pe_n  + getREP() << " ke_n " << ke_n << " fix_n " << fix_n
         //<< " rand_no " << rand_no << " RT " << RT << " exp(-(etot_n - etot_proposed) " << exp(-(etot_n - etot_proposed) / RT)
         //<< " etot_n " << etot_n  + getREP() << " etot_proposed " << etot_proposed + getREP()
@@ -291,15 +288,15 @@ void GirolamiSampler::update(SimTK::State& someState, SimTK::Real timestep, int 
     // Apply Metropolis criterion
 ////    if(1){ // Always accept // TODO
     //assert(!std::isnan(pe_n));
-    if ( (!std::isnan(pe_n)) || (etot_n < etot_proposed) || (rand_no < exp(-(etot_n - etot_proposed)/RT)) ){ // Accept
+    if ( (!std::isnan(pe_n)) || (etot_n < etot_o) || (rand_no < exp(-(etot_n - etot_o)/RT)) ){ // Accept
         std::cout << " acc 1 " ;
-        setSetTVector(someState);
+        storeSimbodyConfiguration_XFMs(someState);
         //sendConfToEvaluator(); // OPENMM
         setSetPE(pe_n);
         setSetFixman(fix_n);
-        setLastAcceptedKE(ke_n);
+        setSetKE(ke_n);
         //this->etot_set = getSetPE() + getSetFixman() + getLastAcceptedKE(); // TODO:seems wrong
-        this->etot_set = getSetPE() + getSetFixman() + getProposedKE(); // TODO
+        this->etot_set = getSetPE() + getSetFixman() + getOldKE(); // TODO
     }else{ // Reject
         std::cout << " acc 0 " ;
         assignConfFromSetTVector(someState);
@@ -312,8 +309,6 @@ void GirolamiSampler::update(SimTK::State& someState, SimTK::Real timestep, int 
 
     // Keep track of how many MC trials have been done 
     ++nofSamples;
-
-
 }
 
 

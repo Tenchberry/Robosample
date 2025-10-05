@@ -8,28 +8,22 @@ Implementation of ConformationalSearch class. **/
 #include "Topology.hpp"
 
 // Constructor
-ConformationalSearch::ConformationalSearch(SimTK::CompoundSystem *argCompoundSystem,
-                                     SimTK::SimbodyMatterSubsystem *argMatter,
-                                     SimTK::Compound *argResidue,
-                                     SimTK::DuMMForceFieldSubsystem *argDumm,
-                                     SimTK::GeneralForceSubsystem *argForces,
-                                     SimTK::TimeStepper *argTimeStepper)
-    : Sampler(argCompoundSystem, argMatter, argResidue, argDumm, argForces, argTimeStepper)
+ConformationalSearch::ConformationalSearch(World &argWorld,
+		SimTK::CompoundSystem &argCompoundSystem,
+		SimTK::SimbodyMatterSubsystem &argMatter,
+		std::vector<Topology> &argTopologies, 
+		SimTK::DuMMForceFieldSubsystem &argDumm,
+		SimTK::GeneralForceSubsystem &argForces,
+		SimTK::TimeStepper &argTimeStepper) :
+        Sampler(argWorld, argCompoundSystem, argMatter, argTopologies, argDumm, argForces, argTimeStepper)
 {
-    TRACE("NEW ALLOC\n");
-    TVector = new SimTK::Transform[matter->getNumBodies()];
-    TRACE("NEW ALLOC\n");
-    SetTVector = new SimTK::Transform[matter->getNumBodies()];
-    this->residualEmbeddedPotential = 0.0;
-    this->alwaysAccept = false;
-    acceptedSteps = 0;
+    TVector = std::vector<SimTK::Transform>(matter->getNumBodies());
+    SetTVector = std::vector<SimTK::Transform>(matter->getNumBodies());
 }
 
 // Destructor
 ConformationalSearch::~ConformationalSearch()
 {
-    delete [] TVector;
-    delete [] SetTVector;
 }
 
 // Seed the random number generator. Set simulation temperature,
@@ -50,7 +44,6 @@ void ConformationalSearch::initialize(SimTK::State& someState, SimTK::Real argTe
     int i = 0;
     for (SimTK::MobilizedBodyIndex mbx(1); mbx < matter->getNumBodies(); ++mbx){
         const SimTK::MobilizedBody& mobod = matter->getMobilizedBody(mbx);
-        const SimTK::Vec3& vertex = mobod.getBodyOriginLocation(someState);
         SetTVector[i] = TVector[i] = mobod.getMobilizerTransform(someState);
         i++;
     }
@@ -84,7 +77,6 @@ void ConformationalSearch::reinitialize(SimTK::State& someState, SimTK::Real arg
     int i = 0;
     for (SimTK::MobilizedBodyIndex mbx(1); mbx < matter->getNumBodies(); ++mbx){
         const SimTK::MobilizedBody& mobod = matter->getMobilizedBody(mbx);
-        const SimTK::Vec3& vertex = mobod.getBodyOriginLocation(someState);
         SetTVector[i] = TVector[i] = mobod.getMobilizerTransform(someState);
         i++;
     }
@@ -144,14 +136,12 @@ SimTK::Real ConformationalSearch::calcFixman(SimTK::State& someState){
     //matter->calcM(someState, M);
 
     // Get detM
-    SimTK::Real detM = 1.0;
     SimTK::Vector DetV(nu);
-    TRACE("NEW ALLOC\n");
-    SimTK::Real* D0 = new SimTK::Real(1.0);
+    SimTK::Real D0 = 1.0;
 
     // TODO: remove the request for Dynamics stage cache in SImbody files
     //std::cout << "ConformationalSearch::calcFixman Stage: "<< matter->getStage(someState) << std::endl;
-    matter->calcDetM(someState, V, DetV, D0);
+    matter->calcDetM(someState, V, DetV, &D0);
 
     //std::cout << "FixmanTorque: " << "ConformationalSearch::calcFixman logdetM: " << std::setprecision(10) << std::log(*D0) << std::setprecision(2) << std::endl;
     //std::cout << "ConformationalSearch::calcFixman RT: " << RT << std::endl;
@@ -166,8 +156,8 @@ SimTK::Real ConformationalSearch::calcFixman(SimTK::State& someState){
     //SimTK::Real EiDetM = EiM.determinant();
     //std::cout << "EiDetM= " << EiDetM << std::endl;
     assert(RT > SimTK::TinyReal);
-    SimTK::Real result = 0.5 * RT * std::log(*D0);
-    delete D0;
+    SimTK::Real result = 0.5 * RT * std::log(D0);
+    
     return result;
 }
 
@@ -312,14 +302,14 @@ void ConformationalSearch::setSetTVector(const SimTK::State& someState)
 // Get the stored configuration
 SimTK::Transform * ConformationalSearch::getTVector(void)
 {
-    return this->TVector;
+    return &TVector[0];
 }
 
 // Stores the configuration into an internal vector of transforms TVector
 // Get the stored configuration
 SimTK::Transform * ConformationalSearch::getSetTVector(void)
 {
-    return this->SetTVector;
+    return &SetTVector[0];
 }
 
 // Restores configuration from the internal set vector of transforms TVector
@@ -371,7 +361,7 @@ void ConformationalSearch::assignConfFromTVector(SimTK::State& someState)
 // In torsional dynamics the first body has 7 Q variables for 6 dofs - one
 // quaternion (q) and 3 Cartesian coordinates (x). updQ will return: 
 // [qw, qx, qy, qz, x1, x2, x3]
-void ConformationalSearch::propose(SimTK::State& someState)
+bool ConformationalSearch::propose(SimTK::State& someState)
 {
     //randomEngine.seed(4294653137UL); // for reproductibility
 
@@ -406,16 +396,20 @@ void ConformationalSearch::propose(SimTK::State& someState)
     }
     */
 
+   // TODO
+    assert(!"What should we return here?");
+    return true;
+
 }
 
 // The update step in Monte Carlo methods consists in:
 // Acception - rejection step
 void ConformationalSearch::update(SimTK::State& someState){
     SimTK::Real rand_no = uniformRealDistribution(randomEngine);
-    SimTK::Real RT = getTemperature() * SimTK_BOLTZMANN_CONSTANT_MD;
+    RT = getTemperature() * SimTK_BOLTZMANN_CONSTANT_MD;
 
     // Get old energy
-    SimTK::Real pe_o = getOldPE();
+    pe_o = getOldPE();
 
     // Assign random configuration
 
@@ -427,7 +421,7 @@ void ConformationalSearch::update(SimTK::State& someState){
 
     // Get current potential energy from evaluator
 
-    SimTK::Real pe_n = getPEFromEvaluator(someState); // OPENMM
+    auto pe_n = getPEFromEvaluator(someState); // OPENMM
 
     // Apply Metropolis criterion
 
@@ -435,9 +429,10 @@ void ConformationalSearch::update(SimTK::State& someState){
     if ((pe_n < pe_o) or (rand_no < exp(-(pe_n - pe_o)/RT))){ // Accept
         setTVector(someState);
         setOldPE(pe_n);
-        ++acceptedSteps;
+        this->acc = true;
     }else{ // Reject
         assignConfFromTVector(someState);
+        this->acc = false;
     }
 }
 
@@ -479,15 +474,15 @@ void ConformationalSearch::setThermostat(std::string argThermostat){
     try{
 
         if(_thermostat == "none"){
-            this->thermostat = NONE;
+            this->thermostat = ThermostatName::NONE;
         }else if(_thermostat == "andersen"){
-            this->thermostat = ANDERSEN;
+            this->thermostat = ThermostatName::ANDERSEN;
         }else if(_thermostat == "berendsen"){
-            this->thermostat = BERENDSEN;
+            this->thermostat = ThermostatName::BERENDSEN;
         }else if(_thermostat == "langevin"){
-            this->thermostat = LANGEVIN;
+            this->thermostat = ThermostatName::LANGEVIN;
         }else if(_thermostat == "nose_hoover"){
-            this->thermostat = NOSE_HOOVER;
+            this->thermostat = ThermostatName::NOSE_HOOVER;
         }else{
             throw std::invalid_argument("Thermostat");
         }
@@ -510,15 +505,15 @@ void ConformationalSearch::setThermostat(const char *argThermostat){
     try{
 
         if(_thermostat == "none"){
-            this->thermostat = NONE;
+            this->thermostat = ThermostatName::NONE;
         }else if(_thermostat == "andersen"){
-            this->thermostat = ANDERSEN;
+            this->thermostat = ThermostatName::ANDERSEN;
         }else if(_thermostat == "berendsen"){
-            this->thermostat = BERENDSEN;
+            this->thermostat = ThermostatName::BERENDSEN;
         }else if(_thermostat == "langevin"){
-            this->thermostat = LANGEVIN;
+            this->thermostat = ThermostatName::LANGEVIN;
         }else if(_thermostat == "nose_hoover"){
-            this->thermostat = NOSE_HOOVER;
+            this->thermostat = ThermostatName::NOSE_HOOVER;
         }else{
             throw std::invalid_argument("Thermostat");
         }
@@ -542,14 +537,3 @@ ThermostatName ConformationalSearch::getThermostat(void){
 void ConformationalSearch::sendConfToEvaluator(void){
     assert(!"Not implemented");
 }
-
-// Get the number of accpted conformations
-int ConformationalSearch::getAcceptedSteps(void)
-{
-    return acceptedSteps;
-}
-
-
-
-
-

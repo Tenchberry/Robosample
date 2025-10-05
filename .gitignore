@@ -1,3 +1,30 @@
-build-debug
-cmake-build-debug
-.idea
+# compilation stuff
+build
+build_debug
+doc/html
+doc/html/*
+
+# tools folder
+tools/__pycache__/*
+tools/*.pyc
+tools/.*.swp
+tools/demo/robots/
+tools/demo/inp.*
+tools/demo/out.*
+tools/__pycache__/
+tools/__pycache__/*
+
+tickets.txt
+.vscode/*
+
+Doxyfile
+Doxyfile.bak
+draw/
+html/
+latex/
+projman/
+
+draw/*
+html/*
+latex/*
+projman/*

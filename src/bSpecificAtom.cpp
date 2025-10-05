@@ -2,56 +2,70 @@
 
 using namespace SimTK;
 
-/****
- * bSpecificAtom
- ****/
-bSpecificAtom::bSpecificAtom(){
-    nbonds = 0;
-    freebonds = 0;
-    number = 0;
-    bZeroCharArray(name, 5);
-    bZeroCharArray(inName, 5);
-    bZeroCharArray(fftype, 20);
-    //bZeroCharArray(biotype, 20);
-    x = -999;
-    y = -999;
-    z = -999;
-    visited = 0;
-    charge = 0.0;
+/*! <!-- Create a Comopund for this specific atom -->
+*/
+void bSpecificAtom::setAtomCompound(const SimTK::Element &element) {
+
+    const std::string& atomName = getName();
+
+    // Add BondCenters 
+    compoundSingleAtom = new SimTK::Compound::SingleAtom(atomName, element);
+    const int currAtomNBonds = getNBonds();
+	const std::string& currAtomName = getName();    
+    if(currAtomNBonds > 0){
+        if (currAtomNBonds == 1){
+            compoundSingleAtom->addFirstBondCenter("bond1", currAtomName);
+        } else {
+            SimTK::Angle TetrahedralAngle = 109.47 * Deg2Rad;
+            compoundSingleAtom->addFirstTwoBondCenters("bond1", "bond2",
+                currAtomName, UnitVec3(1, 0, 0), UnitVec3(-0.5, 0.866025, 0.0));
+            if (currAtomNBonds > 2) {
+                compoundSingleAtom->addLeftHandedBondCenter("bond3",
+                    currAtomName, TetrahedralAngle, TetrahedralAngle);
+            }
+            if (currAtomNBonds > 3){
+                compoundSingleAtom->addRightHandedBondCenter("bond4",
+                    currAtomName, TetrahedralAngle, TetrahedralAngle);
+            }
+        }
+        // Set the inboard BondCenter
+        compoundSingleAtom->setInboardBondCenter("bond1");
+        compoundSingleAtom->setDefaultInboardBondLength(0.19);
+    }
+
+    // Set the Compound name for the atom
+    compoundSingleAtom->setCompoundName("SingleAtom");
+
 }
 
-/** We do not deallocate bAtomType here. We leave this task to the Topology
-class that owns this atom in order to allow the number of atoms connected to
-this to change (e.g. semi-grand canonical ensemble). **/
-bSpecificAtom::~bSpecificAtom(){
+/*! <!-- Delete this atom's Compound -->
+*/
+void bSpecificAtom::deleteAtomCompound() {
+    if (compoundSingleAtom != nullptr) {
+        delete compoundSingleAtom;
+        compoundSingleAtom = nullptr;
+    }
 }
 
-// Init function
-void bSpecificAtom::Zero(void){
-    nbonds = 0;
-    freebonds = 0;
-    number = 0;
-    bZeroCharArray(name, 5);
-    bZeroCharArray(inName, 5);
-    bZeroCharArray(fftype, 20);
-    //bZeroCharArray(biotype, 20);
-    x = -999;
-    y = -999;
-    z = -999;
-    visited = 0;
-    bAtomType = NULL;
-}
-
-void bSpecificAtom::Print(void)
+/*! <!-- Print info -->
+*/
+void bSpecificAtom::Print(int whichWorld) const
 {
-    std::cout<<"bSpecificAtom Print: nbonds "<<nbonds<<" freebonds "<<freebonds<<" name "<<name<<" inName "<<inName
-        <<" number "<<number<<" atomIndex  "<<atomIndex<<" elem "<<elem<<" atomicNumber "<<atomicNumber<<" x "<<x<<" y "<< y<<" z "<<z
-        <<" mass "<<mass<<" vdwRadius  "<<vdwRadius<<" LJWellDepth  "<<LJWellDepth<<" fftype "<<fftype
-        <<" atomClassIndex  "<<atomClassIndex<<" biotype (useless) "<< biotype << " biotypeIndex " << biotypeIndex 
+    std::cout<<"bSpecificAtom Print: nbonds "<<nbonds<<" freebonds "<<freebonds<<" name "<< name <<" inName "<< inName
+        <<" number "<<number<<" atomIndex  "<<compoundAtomIndex<<" elem "<<elem<<" atomicNumber "<<atomicNumber
+        << " x " << x << " y " << y << " z " << z
+        <<" Cartesians " << Cartesians[0] << " " << Cartesians[1] << " " << Cartesians[2] 
+        <<" mass "<<mass<<" vdwRadius  "<<vdwRadius<<" LJWellDepth  "<<LJWellDepth<<" fftype "<< fftype
+        <<" atomClassIndex  "<<dummAtomClassIndex<<" biotype "<< biotype << " biotypeIndex " << biotypeIndex 
         //<< " bAtomType "<< bAtomType 
-        <<" charge "<<charge<<" mobile "<<mobile<<" visited "<<visited<<std::endl;
+        <<" charge "<<charge
+        //<< " mobile "<<mobile
+        <<" visited "<<visited
+        <<" moleculeIndex "<<moleculeIndex
+        <<std::endl;
 
-    std::cout << "Neighbors:";
+
+/*     std::cout << "Neighbors:";
     for(std::vector<bSpecificAtom *>::iterator it = neighbors.begin();
     it != neighbors.end(); ++it){
         std::cout << ' ' << (*it)->number;
@@ -61,131 +75,188 @@ void bSpecificAtom::Print(void)
     std::cout << "Bonds Involved:" << std::endl;
     for(std::vector<bBond *>::iterator it = bondsInvolved.begin();
     it != bondsInvolved.end(); ++it){
-        (*it)->Print();
-    }
+        (*it)->Print(whichWorld);
+    } */
 
     // Residue info
     //std::string residueName;
     //long int residueIndex;
     //std::string chain;
     //int moleculeIndex;
-
-
 }
 
 
 // bSpecificAtom Interface
 
 // Returns the # of bonds this atom is involved in
-int bSpecificAtom::getNBonds(void){
+int bSpecificAtom::getNBonds() const
+{
     return this->nbonds;
 }
 
 // Returns the # of available bonds left for this atom
-int bSpecificAtom::getFreebonds(void)
+int bSpecificAtom::getFreebonds() const
 {
     return this->freebonds;
 }
 
 // Returns atom name
-std::string bSpecificAtom::getName(void)
+std::string bSpecificAtom::getName() const
 {
-    return this->name;
+    return name;
 }
 
 // Returns atom initial name as received from the reader
-std::string bSpecificAtom::getInName(void)
+std::string bSpecificAtom::getInName() const
 {
-    return this->inName;
+    return inName;
 }
 
 // Returns atom number
-int bSpecificAtom::getNumber(void)
+int bSpecificAtom::getNumber() const
 {
     return this->number;
 }
 
 // Returns atom element
-char bSpecificAtom::getElem(void)
+std::string bSpecificAtom::getElem() const
 {
     return this->elem;
 }
 
 // Returns X Cartesian coordinate
-SimTK::Real bSpecificAtom::getX(void) const
+SimTK::Real bSpecificAtom::getX() const
 {
     return this->x;
 }
 
 // Returns Y Cartesian coordinate
-SimTK::Real bSpecificAtom::getY(void) const
+SimTK::Real bSpecificAtom::getY() const
 {
     return this->y;
 }
 
 // Returns Z Cartesian coordinate
-SimTK::Real bSpecificAtom::getZ(void) const
+SimTK::Real bSpecificAtom::getZ() const
 {
     return this->z;
 }
 
-// Returns force field atom type
-std::string bSpecificAtom::getFftype(void)
+// Returns the Cartesian coordinates
+const double* bSpecificAtom::getCartesians() const
 {
-    return this->fftype;
+    return Cartesians;
+}
+
+// Returns force field atom type
+std::string bSpecificAtom::getFftype() const
+{
+    return fftype;
 }
 
 // Returns atom Molmodel biotype name
-std::string bSpecificAtom::getBiotype(void)
+std::string bSpecificAtom::getBiotype() const
 {
     return this->biotype;
 }
 
-// Returns Molmodel atom type as SimTK::Compound::SingleAtom *
-SimTK::Compound::SingleAtom * bSpecificAtom::getBAtomType(void)
-{
-    return this->bAtomType;
+const SimTK::Compound::SingleAtom& bSpecificAtom::getSingleAtom() const {
+    return *compoundSingleAtom;
 }
 
 // Get atom's index as held in Compound
-SimTK::Compound::AtomIndex bSpecificAtom::getCompoundAtomIndex(void)
+SimTK::Compound::AtomIndex bSpecificAtom:: getCompoundAtomIndex() const
 {
-    return this->atomIndex;
+    return this->compoundAtomIndex;
 }
 
 //
-SimTK::Real bSpecificAtom::getCharge(void){
+SimTK::Real bSpecificAtom::getCharge() const {
     assert(!"Not implemented");
+    throw std::exception();
+
+    return SimTK::NaN;
 }
 
 //
-int bSpecificAtom::getIsMobile(void)
-{
-    assert(!"Not implemented");
-}
+// int bSpecificAtom::getIsMobile() const
+// {
+//     assert(!"Not implemented");
+//     throw std::exception();
+    
+//     return std::numeric_limits<int>::min();
+// }
 
 //
-int bSpecificAtom::getIsVisited(void)
+bool bSpecificAtom::wasVisited() const
 {
-    assert(!"Not implemented");
+    if( this->visited > 0){
+        return true;
+    }else{
+        return false;
+    }
 }
 
-void bSpecificAtom::setNbonds(int)
+int bSpecificAtom::getVisited() const
 {
-    assert(!"Not implemented");
+    return this->visited;
 }
 
-void bSpecificAtom::setFreebonds(int){assert(!"Not implemented");}
+/** Set the number of times this atom was visited during the construction of
+ * the graph **/
+void bSpecificAtom::setVisited(bool argVisited)
+{
+    this->visited = argVisited;
+}
+
+void bSpecificAtom::setNbonds(std::size_t nbondsArg)
+{
+     this->nbonds = nbondsArg;
+}
+
+void bSpecificAtom::setFreebonds(std::size_t freebondsArg)
+{
+     this->freebonds = freebondsArg;
+}
+
+void bSpecificAtom::incrFreebonds(void)
+{
+     (this->freebonds)++;
+}
+
+void bSpecificAtom::decrFreebonds(void)
+{
+     (this->freebonds)--;
+}
 
 // Set atom unique name
-void bSpecificAtom::setName(std::string inpName){
-    strncpy(this->name, inpName.c_str(), 5);
+void bSpecificAtom::generateName(int nameCounter) {
+    std::string string_name;
+    std::string aStr, bStr, cStr, dStr;
+    int a=65, b=65, c=65, d=65;
+    int aRest=0, bRest=0, cRest=0;
+
+    a = int(nameCounter / std::pow(25, 3));
+    aStr = (char)(a + 65);
+    aRest = nameCounter % int(std::pow(25, 3));
+
+    b = int(aRest / std::pow(25, 2));
+    bStr = (char)(b + 65);
+    bRest = aRest % int(std::pow(25, 2));
+
+    c = int(bRest / std::pow(25, 1));
+    cStr = (char)(c + 65);
+    cRest = bRest % int(std::pow(25, 1));
+
+    d = int(cRest / std::pow(25, 0));
+    dStr = (char)(d + 65);
+
+    name = aStr + bStr + cStr + dStr;
 }
 
 // Set initial name
-
-void bSpecificAtom::setInName(std::string inpInName){
-    strncpy(this->inName, inpInName.c_str(), 4);
+void bSpecificAtom::setInName(const std::string& inName){
+    this->inName = inName;
 }
 
 // Set number
@@ -194,8 +265,8 @@ void bSpecificAtom::setNumber(int inpNumber){
 }
 
 // Set element
-void bSpecificAtom::setElem(char inpElem){
-    this->elem = inpElem;
+void bSpecificAtom::setElem(const std::string& elem){
+    this->elem = elem;
 }
 
 // Set the X coordinate
@@ -213,8 +284,47 @@ void bSpecificAtom::setZ(SimTK::Real inpZ){
     this->z = inpZ;
 }
 
+// Set the Cartesian coordinates
+void bSpecificAtom::setCartesians(
+    SimTK::Real inpX, SimTK::Real inpY, SimTK::Real inpZ)
+{
+    Cartesians[0] = inpX;
+    Cartesians[1] = inpY;
+    Cartesians[2] = inpZ;
+}
+
+// // Set the Cartesian coordinates
+// void bSpecificAtom::setCartesians(
+//     double* inpXYZ)
+// {
+//     assert( sizeof(inpXYZ) / sizeof(inpXYZ[0]) == 3 );
+//     Cartesians[0] = inpXYZ[0];
+//     Cartesians[1] = inpXYZ[1];
+//     Cartesians[2] = inpXYZ[2];
+
+// }
+
+// Set the Cartesian coordinates
+void bSpecificAtom::setCartesians(
+    SimTK::Vec3 inpXYZ)
+{
+    Cartesians[0] = inpXYZ[0];
+    Cartesians[1] = inpXYZ[1];
+    Cartesians[2] = inpXYZ[2];
+}
+
+// Set the Cartesian coordinates
+void bSpecificAtom::setCartesians(
+    OpenMM::Vec3 inpXYZ)
+{
+    Cartesians[0] = inpXYZ[0];
+    Cartesians[1] = inpXYZ[1];
+    Cartesians[2] = inpXYZ[2];
+}
+
+
 // Get atomic mass
-SimTK::mdunits::Mass bSpecificAtom::getMass(void)
+SimTK::mdunits::Mass bSpecificAtom::getMass() const
 {
     return this->mass;
 }
@@ -226,29 +336,20 @@ void bSpecificAtom::setMass(SimTK::Real inpMass)
 }
 
 // Set force field atom type
-void bSpecificAtom::setFftype(std::string inpFftype){
-    //strncpy(this->fftype, inpFftype.c_str(), 20);
-    sprintf(this->fftype, "%s", inpFftype.c_str());
+void bSpecificAtom::setFfType(const std::string& fftype)
+{
+    this->fftype = fftype;
 }
 
 // Set atom Biotype name - dangerous
-void bSpecificAtom::setBiotype(std::string inpBiotype)
+void bSpecificAtom::setBiotype(const std::string& biotype)
 {
-    biotype = inpBiotype;
+    this->biotype = biotype;
 }
-
-// Set atom Biotype name - dangerous
-void bSpecificAtom::setBiotype(const char * inpBiotype)
-{
-    biotype = inpBiotype;
-}
-
-// Set 
-void bSpecificAtom::setBAtomType(SimTK::Compound::SingleAtom *){assert(!"Not implemented");}
 
 void bSpecificAtom::setCompoundAtomIndex(SimTK::Compound::AtomIndex inpAtomIndex)
 {
-    this->atomIndex = inpAtomIndex;
+    this->compoundAtomIndex = inpAtomIndex;
 }
 
 // Set charge
@@ -256,30 +357,20 @@ void bSpecificAtom::setCharge(SimTK::Real inpCharge){
     this->charge = inpCharge;
 }
 
-
-void bSpecificAtom::setIsMobile(int){assert(!"Not implemented");}
-
-/** Set the number of times this atom was visited during the construction of
- * the graph **/
-void bSpecificAtom::setVisited(int argVisited)
-{
-    this->visited = argVisited;
-}
-
 // Get the atom class index
-DuMM::AtomClassIndex bSpecificAtom::getAtomClassIndex(void)
+DuMM::AtomClassIndex bSpecificAtom::getDummAtomClassIndex() const
 {
-    return this->atomClassIndex;
+    return this->dummAtomClassIndex;
 }
 
 // Set the atom class index
-void bSpecificAtom::setAtomClassIndex(DuMM::AtomClassIndex inpAtomClassIndex)
+void bSpecificAtom::setDummAtomClassIndex(DuMM::AtomClassIndex inpAtomClassIndex)
 {
-    this->atomClassIndex = inpAtomClassIndex;
+    this->dummAtomClassIndex = inpAtomClassIndex;
 }
 
 // Get the atomic number
-int bSpecificAtom::getAtomicNumber(void)
+int bSpecificAtom::getAtomicNumber() const
 {
     return this->atomicNumber;
 }
@@ -297,7 +388,7 @@ void bSpecificAtom::setVdwRadius(SimTK::Real inpVdwRadius)
 }
 
 //
-SimTK::Real bSpecificAtom::getVdwRadius(void)
+SimTK::Real bSpecificAtom::getVdwRadius() const
 {
     return this->vdwRadius;
 }
@@ -309,13 +400,13 @@ void bSpecificAtom::setLJWellDepth(SimTK::Real inpLJWellDepth)
 }
 
 //
-SimTK::Real bSpecificAtom::getLJWellDepth(void)
+SimTK::Real bSpecificAtom::getLJWellDepth() const
 {
     return this->LJWellDepth;
 }
 
 // Get BiotypeIndex
-SimTK::BiotypeIndex bSpecificAtom::getBiotypeIndex(void)
+SimTK::BiotypeIndex bSpecificAtom::getBiotypeIndex() const
 {
     return biotypeIndex;
 }
@@ -326,53 +417,99 @@ void bSpecificAtom::setBiotypeIndex(SimTK::BiotypeIndex argBiotypeIndex)
     this->biotypeIndex = argBiotypeIndex;
 }
 
-// Add an atom pointer to the vector of atom neighbors
-void bSpecificAtom::addNeighbor(bSpecificAtom *someNeighbor)
-{
-    neighbors.push_back(someNeighbor);
+// // Add an atom pointer to the vector of atom neighbors
+// void bSpecificAtom::addNeighbor(bSpecificAtom *someNeighbor)
+// {
+//     neighbors.push_back(someNeighbor);
+// }
+
+// // Add a bond this atom is involved in to the vector of bonds
+// void bSpecificAtom::addBond(bBond *someBond)
+// {
+//     bondsInvolved.push_back(someBond);
+// }
+
+void bSpecificAtom::addNeighborIndex(int index) {
+    neighborsIndex.push_back(index);
 }
 
-// Add a bond this atom is involved in to the vector of bonds
-void bSpecificAtom::addBond(bBond *someBond)
-{
-    bondsInvolved.push_back(someBond);
+void bSpecificAtom::addBondIndex(int index) {
+    bondsInvolvedIndex.push_back(index);
 }
 
-const DuMM::ChargedAtomTypeIndex bSpecificAtom::getChargedAtomTypeIndex() const {
+std::size_t bSpecificAtom::getNumBonds() const {
+    return bondsInvolvedIndex.size();
+}
+
+DuMM::ChargedAtomTypeIndex bSpecificAtom::getChargedAtomTypeIndex() const {
     return chargedAtomTypeIndex;
 }
 
-void bSpecificAtom::setChargedAtomTypeIndex(const SimTK::DuMM::ChargedAtomTypeIndex cAIx) {
-    bSpecificAtom::chargedAtomTypeIndex = cAIx;
+void bSpecificAtom::setChargedAtomTypeIndex(const SimTK::DuMM::ChargedAtomTypeIndex chATIx) {
+    bSpecificAtom::chargedAtomTypeIndex = chATIx;
 }
 
-/********************
- *     FUNCTIONS
- * ******************/
-int bAtomAssign(MolAtom *dest, const bSpecificAtom *src)
+// /********************
+//  *     FUNCTIONS
+//  * ******************/
+// int bAtomAssign(MolAtom *dest, const bSpecificAtom *src)
+// {
+// /*     dest->name = new char[5]; // TODO who deletes this?
+
+//     std::copy(dest->name, dest->name + 5, src->getName().begin());
+
+//     dest->num = src->getNumber();
+
+//     switch(src->getElem()){
+//         case 'C': dest->type = MOL_ATOM_ELEMENT_CARBON; break;
+//         case 'H': dest->type = MOL_ATOM_ELEMENT_HYDROGEN; break;
+//         case 'N': dest->type = MOL_ATOM_ELEMENT_NITROGEN; break;
+//         case 'O': dest->type = MOL_ATOM_ELEMENT_OXYGEN; break;
+//         case 'S': dest->type = MOL_ATOM_ELEMENT_SULFUR; break;
+//         case 'P': dest->type = MOL_ATOM_ELEMENT_PHOSPHORUS; break;
+//         default: dest->type = MOL_ATOM_ELEMENT_UNKNOWN; break;
+//     }
+
+//     // TODO they use float, we use double
+//     dest->pos[0] = static_cast<float>(src->getX());
+//     dest->pos[1] = static_cast<float>(src->getY());
+//     dest->pos[2] = static_cast<float>(src->getZ()); */
+
+//     return 0;
+// }
+
+void bSpecificAtom::setCompoundName(const SimTK::Compound::Name& name) {
+    compoundSingleAtom->setCompoundName(name);
+}
+
+// Getter and setter for the residueName property
+std::string bSpecificAtom::getResidueName() const {
+    return residueName;
+}
+
+void bSpecificAtom::setResidueName(const std::string& value) {
+    residueName = value; // Directly assign the new value
+}
+
+
+const int bSpecificAtom::getMoleculeIndex() const
 {
-  dest->name = new char[5];
-  strncpy(dest->name, src->name, 4);
-
-  dest->num = src->number;
-
-  switch(src->elem){
-    case 'C': dest->type = MOL_ATOM_ELEMENT_CARBON; break;
-    case 'H': dest->type = MOL_ATOM_ELEMENT_HYDROGEN; break;
-    case 'N': dest->type = MOL_ATOM_ELEMENT_NITROGEN; break;
-    case 'O': dest->type = MOL_ATOM_ELEMENT_OXYGEN; break;
-    case 'S': dest->type = MOL_ATOM_ELEMENT_SULFUR; break;
-    case 'P': dest->type = MOL_ATOM_ELEMENT_PHOSPHORUS; break;
-    default: dest->type = MOL_ATOM_ELEMENT_UNKNOWN; break;
-  }
-
-  dest->pos[0] = src->x;
-  dest->pos[1] = src->y;
-  dest->pos[2] = src->z;
-
-  return 0;
+    return moleculeIndex;
 }
 
+void bSpecificAtom::setMoleculeIndex(int molIxArg)
+{
+    this->moleculeIndex = molIxArg;
+}
 
+void bSpecificAtom::setParentNumber(int n) {
+    parentNumber = n;
+}
 
+int bSpecificAtom::getParentNumber() const {
+    return parentNumber;
+};
 
+void bSpecificAtom::setName(const std::string& name) {
+    this->name = name;
+}
